@@ -9,6 +9,10 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@aws-crypto/sha256-js": "^5.2.0",
+    "@aws-sdk/signature-v4": "^3.374.0",
+    "@smithy/node-http-handler": "^4.9.11",
+    "@smithy/protocol-http": "^5.5.14",
     "next": "16.2.12",
     "react": "19.2.4",
     "react-dom": "19.2.4"

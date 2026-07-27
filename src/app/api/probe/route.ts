@@ -1,11 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
+import { sendMessages, type Provider } from "@/lib/send";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
 interface ProbeRequestBody {
-  baseUrl: string;
-  apiKey: string;
+  provider?: Provider;
+  baseUrl?: string;
+  apiKey?: string;
+  region?: string;
+  accessKeyId?: string;
+  secretAccessKey?: string;
+  sessionToken?: string;
   model?: string;
   prompt?: string;
   maxTokens?: number;
@@ -17,13 +23,6 @@ interface ProbeRequestBody {
 const DEFAULT_PROMPT =
   "A rope hangs over a frictionless pulley, with a 3kg mass on one side and a 5kg mass on the other. Compute the acceleration of the system and the tension in the rope. Show your reasoning step by step, then give the final numeric answers.";
 
-function normalizeBaseUrl(raw: string): string {
-  let u = raw.trim().replace(/\/+$/, "");
-  // Allow pasting with or without /v1 suffix
-  if (u.endsWith("/v1")) u = u.slice(0, -3);
-  return u;
-}
-
 export async function POST(req: NextRequest) {
   let body: ProbeRequestBody;
   try {
@@ -32,11 +31,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { baseUrl, apiKey } = body;
-  if (!baseUrl || !apiKey) {
-    return NextResponse.json({ ok: false, error: "baseUrl and apiKey are required" }, { status: 400 });
-  }
-
+  const provider: Provider = body.provider ?? "anthropic";
   const model = body.model?.trim() || "claude-opus-5";
   const prompt = body.prompt?.trim() || DEFAULT_PROMPT;
   const maxTokens = Math.min(Math.max(body.maxTokens ?? 16000, 256), 64000);
@@ -54,35 +49,33 @@ export async function POST(req: NextRequest) {
     payload.output_config = { effort };
   }
 
-  const url = `${normalizeBaseUrl(baseUrl)}/v1/messages`;
-  const started = Date.now();
   try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-api-key": apiKey,
-        "anthropic-version": "2023-06-01",
-      },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(240_000),
+    const { httpStatus, text, latencyMs } = await sendMessages({
+      provider,
+      baseUrl: body.baseUrl,
+      apiKey: body.apiKey,
+      region: body.region,
+      accessKeyId: body.accessKeyId,
+      secretAccessKey: body.secretAccessKey,
+      sessionToken: body.sessionToken,
+      payload,
     });
-    const latencyMs = Date.now() - started;
-    const text = await res.text();
+
     let json: unknown = null;
     try {
       json = JSON.parse(text);
     } catch {
-      /* non-JSON response */
+      /* non-JSON */
     }
 
-    if (!res.ok) {
+    if (httpStatus < 200 || httpStatus >= 300) {
       return NextResponse.json({
         ok: false,
-        httpStatus: res.status,
+        httpStatus,
         latencyMs,
         error:
-          (json as { error?: { message?: string } } | null)?.error?.message ??
+          (json as { error?: { message?: string }; message?: string } | null)?.error?.message ??
+          (json as { message?: string } | null)?.message ??
           text.slice(0, 2000),
         raw: json ?? text.slice(0, 4000),
       });
@@ -111,7 +104,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       ok: true,
-      httpStatus: res.status,
+      httpStatus,
       latencyMs,
       messageId: msg.id ?? null,
       model: msg.model ?? null,
@@ -127,7 +120,6 @@ export async function POST(req: NextRequest) {
   } catch (err) {
     return NextResponse.json({
       ok: false,
-      latencyMs: Date.now() - started,
       error: err instanceof Error ? err.message : String(err),
     });
   }

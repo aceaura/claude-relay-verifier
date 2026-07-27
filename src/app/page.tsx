@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+type Provider = "anthropic" | "bedrock";
 
 interface ProbeResult {
   ok: boolean;
@@ -37,7 +38,19 @@ interface ReplayResult {
   model?: string | null;
 }
 
-interface EndpointState {
+interface TrustedState {
+  provider: Provider;
+  baseUrl: string; // anthropic only
+  apiKey: string; // anthropic only
+  region: string; // bedrock
+  accessKeyId: string;
+  secretAccessKey: string;
+  sessionToken: string;
+  result: ProbeResult | null;
+  loading: boolean;
+}
+
+interface RelayState {
   baseUrl: string;
   apiKey: string;
   result: ProbeResult | null;
@@ -67,6 +80,9 @@ function Badge({ tone, children }: { tone: "green" | "red" | "amber" | "gray"; c
     </span>
   );
 }
+
+const inputCls =
+  "w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-sm text-zinc-100 outline-none focus:border-zinc-500";
 
 function ResultPanel({ title, result }: { title: string; result: ProbeResult | null }) {
   if (!result) {
@@ -136,13 +152,18 @@ function ResultPanel({ title, result }: { title: string; result: ProbeResult | n
 }
 
 export default function Home() {
-  const [official, setOfficial] = useState<EndpointState>({
+  const [trusted, setTrusted] = useState<TrustedState>({
+    provider: "bedrock",
     baseUrl: "https://api.anthropic.com",
     apiKey: "",
+    region: "us-east-1",
+    accessKeyId: "",
+    secretAccessKey: "",
+    sessionToken: "",
     result: null,
     loading: false,
   });
-  const [relay, setRelay] = useState<EndpointState>({
+  const [relay, setRelay] = useState<RelayState>({
     baseUrl: "",
     apiKey: "",
     result: null,
@@ -157,74 +178,126 @@ export default function Home() {
   const [saveKeys, setSaveKeys] = useState(false);
 
   useEffect(() => {
-    const saved = window.localStorage.getItem("crv-keys");
+    const saved = window.localStorage.getItem("crv-keys-v2");
     if (saved) {
       try {
-        const k = JSON.parse(saved) as { officialKey?: string; relayKey?: string; relayUrl?: string };
-        setOfficial((s) => ({ ...s, apiKey: k.officialKey ?? "" }));
+        const k = JSON.parse(saved) as Partial<TrustedState> & { relayKey?: string; relayUrl?: string };
+        setTrusted((s) => ({
+          ...s,
+          provider: (k.provider as Provider) ?? s.provider,
+          apiKey: k.apiKey ?? "",
+          baseUrl: k.baseUrl ?? s.baseUrl,
+          region: k.region ?? s.region,
+          accessKeyId: k.accessKeyId ?? "",
+          secretAccessKey: k.secretAccessKey ?? "",
+          sessionToken: k.sessionToken ?? "",
+        }));
         setRelay((s) => ({ ...s, apiKey: k.relayKey ?? "", baseUrl: k.relayUrl ?? "" }));
         setSaveKeys(true);
       } catch { /* ignore */ }
     }
   }, []);
 
-  async function runProbe(which: "official" | "relay") {
-    const ep = which === "official" ? official : relay;
-    const setEp = which === "official" ? setOfficial : setRelay;
-    setEp((s) => ({ ...s, loading: true, result: null }));
+  const trustedReady =
+    trusted.provider === "anthropic"
+      ? !!trusted.apiKey
+      : !!(trusted.region && trusted.accessKeyId && trusted.secretAccessKey);
+
+  async function runProbe(which: "trusted" | "relay") {
+    const setT = which === "trusted" ? setTrusted : null;
+    const setR = which === "relay" ? setRelay : null;
+    const ep = which === "trusted" ? trusted : relay;
+    const setLoading = (v: boolean) => {
+      if (setT) setT((s) => ({ ...s, loading: v, ...(v ? { result: null } : {}) }));
+      if (setR) setR((s) => ({ ...s, loading: v, ...(v ? { result: null } : {}) }));
+    };
+    setLoading(true);
     try {
+      const body: Record<string, unknown> = {
+        model,
+        prompt,
+        maxTokens,
+        thinking: true,
+        display: "summarized",
+        effort,
+      };
+      if (which === "trusted") {
+        body.provider = trusted.provider;
+        if (trusted.provider === "anthropic") {
+          body.baseUrl = trusted.baseUrl;
+          body.apiKey = trusted.apiKey;
+        } else {
+          body.region = trusted.region;
+          body.accessKeyId = trusted.accessKeyId;
+          body.secretAccessKey = trusted.secretAccessKey;
+          body.sessionToken = trusted.sessionToken;
+        }
+      } else {
+        body.provider = "anthropic";
+        body.baseUrl = ep.baseUrl;
+        body.apiKey = ep.apiKey;
+      }
       const res = await fetch("/api/probe", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          baseUrl: ep.baseUrl,
-          apiKey: ep.apiKey,
-          model,
-          prompt,
-          maxTokens,
-          thinking: true,
-          display: "summarized",
-          effort,
-        }),
+        body: JSON.stringify(body),
       });
       const json = (await res.json()) as ProbeResult;
-      setEp((s) => ({ ...s, loading: false, result: json }));
+      if (setT) setT((s) => ({ ...s, loading: false, result: json }));
+      if (setR) setR((s) => ({ ...s, loading: false, result: json }));
     } catch (err) {
-      setEp((s) => ({
-        ...s,
-        loading: false,
-        result: { ok: false, error: err instanceof Error ? err.message : String(err) },
-      }));
+      const fail: ProbeResult = { ok: false, error: err instanceof Error ? err.message : String(err) };
+      if (setT) setT((s) => ({ ...s, loading: false, result: fail }));
+      if (setR) setR((s) => ({ ...s, loading: false, result: fail }));
     }
   }
 
   function runBoth() {
     if (saveKeys) {
       window.localStorage.setItem(
-        "crv-keys",
-        JSON.stringify({ officialKey: official.apiKey, relayKey: relay.apiKey, relayUrl: relay.baseUrl }),
+        "crv-keys-v2",
+        JSON.stringify({
+          provider: trusted.provider,
+          apiKey: trusted.apiKey,
+          baseUrl: trusted.baseUrl,
+          region: trusted.region,
+          accessKeyId: trusted.accessKeyId,
+          secretAccessKey: trusted.secretAccessKey,
+          sessionToken: trusted.sessionToken,
+          relayKey: relay.apiKey,
+          relayUrl: relay.baseUrl,
+        }),
       );
     }
     setReplayResult(null);
-    if (official.apiKey) runProbe("official");
+    if (trustedReady) runProbe("trusted");
     if (relay.apiKey && relay.baseUrl) runProbe("relay");
   }
 
-  const replaySource = relay.result?.signatureCount ? relay.result : official.result;
+  const replaySource = relay.result?.signatureCount ? relay.result : trusted.result;
 
   async function runReplay() {
     if (!replaySource?.thinkingBlocks?.length) return;
     setReplayLoading(true);
     setReplayResult(null);
     try {
+      const body: Record<string, unknown> = {
+        provider: trusted.provider,
+        model,
+        thinkingBlocks: replaySource.thinkingBlocks,
+      };
+      if (trusted.provider === "anthropic") {
+        body.apiKey = trusted.apiKey;
+      } else {
+        body.region = trusted.region;
+        body.accessKeyId = trusted.accessKeyId;
+        body.secretAccessKey = trusted.secretAccessKey;
+        body.sessionToken = trusted.sessionToken;
+      }
       const res = await fetch("/api/replay", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          apiKey: official.apiKey,
-          model,
-          thinkingBlocks: replaySource.thinkingBlocks,
-        }),
+        body: JSON.stringify(body),
       });
       const json = (await res.json()) as ReplayResult;
       setReplayResult(json);
@@ -236,37 +309,33 @@ export default function Home() {
   }
 
   const cmp = useMemo(() => {
-    const a = official.result, b = relay.result;
+    const a = trusted.result, b = relay.result;
     if (!a?.ok || !b?.ok) return null;
     const outA = a.usage?.output_tokens ?? 0;
     const outB = b.usage?.output_tokens ?? 0;
     const ratio = outA > 0 ? outB / outA : 0;
     const sameModelField = !!a.model && !!b.model && a.model === b.model;
     return { outA, outB, ratio, sameModelField };
-  }, [official.result, relay.result]);
+  }, [trusted.result, relay.result]);
 
-  const canRun = !!official.apiKey && !!relay.apiKey && !!relay.baseUrl && !official.loading && !relay.loading;
+  const canRun = trustedReady && !!relay.apiKey && !!relay.baseUrl && !trusted.loading && !relay.loading;
 
   return (
     <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-8">
       <header className="mb-8">
         <h1 className="text-2xl font-bold text-zinc-100">Claude Relay Verifier</h1>
         <p className="mt-1 text-sm text-zinc-400">
-          Compare an Anthropic-compatible relay against the official API: server-reported model,
-          thinking-block signatures, and thinking effort (output tokens at{" "}
-          <code className="font-mono">effort=max</code>). Keys are sent only to this local server
-          and used for the API calls you trigger.
+          Compare an Anthropic-compatible relay against a trusted baseline — official Anthropic API{" "}
+          <em>or</em> AWS Bedrock (Mantle). Checks server-reported model, thinking-block signatures,
+          and thinking effort (output tokens at <code className="font-mono">effort=max</code>).
+          Credentials are sent only to this local server and used for the API calls you trigger.
         </p>
       </header>
 
       <section className="mb-6 grid gap-4 rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4 md:grid-cols-3">
         <label className="block text-sm">
           <span className="mb-1 block text-zinc-400">model</span>
-          <input
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-sm text-zinc-100 outline-none focus:border-zinc-500"
-          />
+          <input value={model} onChange={(e) => setModel(e.target.value)} className={inputCls} />
         </label>
         <label className="block text-sm">
           <span className="mb-1 block text-zinc-400">effort (thinking on)</span>
@@ -288,7 +357,7 @@ export default function Home() {
             min={256}
             max={64000}
             onChange={(e) => setMaxTokens(Number(e.target.value))}
-            className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-sm text-zinc-100 outline-none focus:border-zinc-500"
+            className={inputCls}
           />
         </label>
         <label className="block text-sm md:col-span-3">
@@ -303,30 +372,92 @@ export default function Home() {
       </section>
 
       <section className="mb-6 grid gap-4 md:grid-cols-2">
+        {/* Trusted baseline */}
         <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
           <div className="mb-3 flex items-center justify-between">
-            <h2 className="font-semibold text-zinc-100">① Official API</h2>
-            <Badge tone="gray">baseline</Badge>
+            <h2 className="font-semibold text-zinc-100">① Trusted baseline</h2>
+            <Badge tone="gray">reference</Badge>
           </div>
-          <label className="mb-3 block text-sm">
-            <span className="mb-1 block text-zinc-400">base URL</span>
-            <input
-              value={official.baseUrl}
-              onChange={(e) => setOfficial((s) => ({ ...s, baseUrl: e.target.value }))}
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-sm text-zinc-100 outline-none focus:border-zinc-500"
-            />
-          </label>
-          <label className="block text-sm">
-            <span className="mb-1 block text-zinc-400">API key</span>
-            <input
-              type="password"
-              value={official.apiKey}
-              onChange={(e) => setOfficial((s) => ({ ...s, apiKey: e.target.value }))}
-              placeholder="sk-ant-..."
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-sm text-zinc-100 outline-none focus:border-zinc-500"
-            />
-          </label>
+          <div className="mb-3 grid grid-cols-2 gap-2">
+            {(["bedrock", "anthropic"] as const).map((p) => (
+              <button
+                key={p}
+                onClick={() => setTrusted((s) => ({ ...s, provider: p }))}
+                className={`rounded-lg border px-3 py-2 text-sm font-medium transition ${
+                  trusted.provider === p
+                    ? "border-zinc-400 bg-zinc-800 text-zinc-100"
+                    : "border-zinc-700 bg-zinc-950 text-zinc-400 hover:border-zinc-500"
+                }`}
+              >
+                {p === "bedrock" ? "AWS Bedrock" : "Anthropic API"}
+              </button>
+            ))}
+          </div>
+
+          {trusted.provider === "anthropic" ? (
+            <>
+              <label className="mb-3 block text-sm">
+                <span className="mb-1 block text-zinc-400">base URL</span>
+                <input
+                  value={trusted.baseUrl}
+                  onChange={(e) => setTrusted((s) => ({ ...s, baseUrl: e.target.value }))}
+                  className={inputCls}
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="mb-1 block text-zinc-400">API key</span>
+                <input
+                  type="password"
+                  value={trusted.apiKey}
+                  onChange={(e) => setTrusted((s) => ({ ...s, apiKey: e.target.value }))}
+                  placeholder="sk-ant-..."
+                  className={inputCls}
+                />
+              </label>
+            </>
+          ) : (
+            <>
+              <label className="mb-3 block text-sm">
+                <span className="mb-1 block text-zinc-400">AWS region</span>
+                <input
+                  value={trusted.region}
+                  onChange={(e) => setTrusted((s) => ({ ...s, region: e.target.value }))}
+                  placeholder="us-east-1"
+                  className={inputCls}
+                />
+              </label>
+              <label className="mb-3 block text-sm">
+                <span className="mb-1 block text-zinc-400">AWS access key ID</span>
+                <input
+                  value={trusted.accessKeyId}
+                  onChange={(e) => setTrusted((s) => ({ ...s, accessKeyId: e.target.value }))}
+                  placeholder="AKIA..."
+                  className={inputCls}
+                />
+              </label>
+              <label className="mb-3 block text-sm">
+                <span className="mb-1 block text-zinc-400">AWS secret access key</span>
+                <input
+                  type="password"
+                  value={trusted.secretAccessKey}
+                  onChange={(e) => setTrusted((s) => ({ ...s, secretAccessKey: e.target.value }))}
+                  className={inputCls}
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="mb-1 block text-zinc-400">session token (optional)</span>
+                <input
+                  type="password"
+                  value={trusted.sessionToken}
+                  onChange={(e) => setTrusted((s) => ({ ...s, sessionToken: e.target.value }))}
+                  className={inputCls}
+                />
+              </label>
+            </>
+          )}
         </div>
+
+        {/* Relay */}
         <div className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="font-semibold text-zinc-100">② Relay under test</h2>
@@ -338,7 +469,7 @@ export default function Home() {
               value={relay.baseUrl}
               onChange={(e) => setRelay((s) => ({ ...s, baseUrl: e.target.value }))}
               placeholder="https://qcode.cc or your relay base"
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-sm text-zinc-100 outline-none focus:border-zinc-500"
+              className={inputCls}
             />
           </label>
           <label className="block text-sm">
@@ -348,9 +479,12 @@ export default function Home() {
               value={relay.apiKey}
               onChange={(e) => setRelay((s) => ({ ...s, apiKey: e.target.value }))}
               placeholder="relay key"
-              className="w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 font-mono text-sm text-zinc-100 outline-none focus:border-zinc-500"
+              className={inputCls}
             />
           </label>
+          <p className="mt-3 text-xs text-zinc-500">
+            Relay must expose the Anthropic Messages API shape (<code className="font-mono">/v1/messages</code>).
+          </p>
         </div>
       </section>
 
@@ -360,7 +494,7 @@ export default function Home() {
           disabled={!canRun}
           className="rounded-xl bg-zinc-100 px-5 py-2.5 text-sm font-semibold text-zinc-900 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-40"
         >
-          {official.loading || relay.loading ? "Running…" : "▶ Run comparison"}
+          {trusted.loading || relay.loading ? "Running…" : "▶ Run comparison"}
         </button>
         <label className="flex items-center gap-2 text-sm text-zinc-400">
           <input
@@ -374,7 +508,7 @@ export default function Home() {
       </div>
 
       <section className="mb-8 grid gap-4 md:grid-cols-2">
-        <ResultPanel title="Official" result={official.result} />
+        <ResultPanel title={trusted.provider === "bedrock" ? "Bedrock (trusted)" : "Official (trusted)"} result={trusted.result} />
         <ResultPanel title="Relay" result={relay.result} />
       </section>
 
@@ -385,29 +519,29 @@ export default function Home() {
             <div className="rounded-xl bg-zinc-950 p-3">
               <div className="mb-1 text-zinc-500">server-reported model</div>
               {cmp.sameModelField ? (
-                <Badge tone="green">match: {official.result!.model}</Badge>
+                <Badge tone="green">match: {trusted.result!.model}</Badge>
               ) : (
                 <Badge tone="amber">
-                  {official.result!.model} vs {relay.result!.model}
+                  {trusted.result!.model} vs {relay.result!.model}
                 </Badge>
               )}
               <p className="mt-1 text-xs text-zinc-500">self-declared — necessary but not sufficient</p>
             </div>
             <div className="rounded-xl bg-zinc-950 p-3">
               <div className="mb-1 text-zinc-500">signatures present</div>
-              {(official.result!.signatureCount ?? 0) > 0 && (relay.result!.signatureCount ?? 0) > 0 ? (
+              {(trusted.result!.signatureCount ?? 0) > 0 && (relay.result!.signatureCount ?? 0) > 0 ? (
                 <Badge tone="green">both sides</Badge>
               ) : (relay.result!.signatureCount ?? 0) === 0 ? (
                 <Badge tone="red">relay has none</Badge>
               ) : (
-                <Badge tone="amber">official has none (check config)</Badge>
+                <Badge tone="amber">baseline has none (check config)</Badge>
               )}
-              <p className="mt-1 text-xs text-zinc-500">missing signature = thinking wasn&apos;t issued by Anthropic</p>
+              <p className="mt-1 text-xs text-zinc-500">missing signature = thinking wasn&apos;t Anthropic-issued</p>
             </div>
             <div className="rounded-xl bg-zinc-950 p-3">
               <div className="mb-1 text-zinc-500">output tokens (effort gauge)</div>
               <Badge tone={cmp.ratio > 0.6 && cmp.ratio < 1.6 ? "green" : "amber"}>
-                relay/official ≈ {cmp.ratio.toFixed(2)}
+                relay/baseline ≈ {cmp.ratio.toFixed(2)}
               </Badge>
               <p className="mt-1 text-xs text-zinc-500">
                 {cmp.outA} vs {cmp.outB} — big shortfall hints at effort watering
@@ -420,31 +554,32 @@ export default function Home() {
       <section className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
         <h2 className="mb-2 font-semibold text-zinc-100">Signature replay (the hard test)</h2>
         <p className="mb-3 text-sm text-zinc-400">
-          Takes the captured thinking block (from the relay if it produced one, else official) and
-          replays it <em>unchanged</em> to the <strong>official</strong> API using your official key.
-          Anthropic cryptographically validates the signature: accepted = genuinely issued by
-          Anthropic for this model; rejected = forged, tampered, or from another provider.
+          Takes the captured thinking block (from the relay if it produced one, else the baseline)
+          and replays it <em>unchanged</em> to your <strong>trusted</strong> endpoint (
+          {trusted.provider === "bedrock" ? "AWS Bedrock" : "official Anthropic API"}).
+          Anthropic&apos;s servers cryptographically validate the signature: accepted = genuinely
+          issued for this model; rejected = forged, tampered, or from another provider.
         </p>
         <button
           onClick={runReplay}
-          disabled={replayLoading || !official.apiKey || !replaySource?.signatureCount}
+          disabled={replayLoading || !trustedReady || !replaySource?.signatureCount}
           className="rounded-xl border border-zinc-600 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:border-zinc-400 disabled:cursor-not-allowed disabled:opacity-40"
         >
           {replayLoading
             ? "Replaying…"
             : replaySource === relay.result
-              ? "⟲ Replay relay's thinking block to official API"
-              : "⟲ Replay official's own thinking block (sanity check)"}
+              ? `⟲ Replay relay's thinking block to ${trusted.provider === "bedrock" ? "Bedrock" : "official API"}`
+              : `⟲ Replay baseline's own thinking block (sanity check)`}
         </button>
-        {!replaySource?.signatureCount && (official.result || relay.result) && (
+        {!replaySource?.signatureCount && (trusted.result || relay.result) && (
           <p className="mt-2 text-xs text-amber-400">No signature captured yet — run the comparison first.</p>
         )}
         {replayResult && (
           <div className="mt-4 rounded-xl bg-zinc-950 p-3 text-sm">
             {replayResult.verdict === "accepted" ? (
-              <Badge tone="green">✔ official API accepted the signature</Badge>
+              <Badge tone="green">✔ trusted endpoint accepted the signature</Badge>
             ) : replayResult.verdict === "signature_rejected" ? (
-              <Badge tone="red">✘ official API rejected it ({replayResult.httpStatus})</Badge>
+              <Badge tone="red">✘ trusted endpoint rejected it ({replayResult.httpStatus})</Badge>
             ) : (
               <Badge tone="amber">inconclusive ({replayResult.httpStatus ?? "network"})</Badge>
             )}
@@ -474,7 +609,7 @@ export default function Home() {
       <footer className="mt-8 text-xs text-zinc-600">
         Note: signature validates <em>model identity</em>, not the effort tier. A relay could still
         serve real claude-opus-5 while silently lowering <code className="font-mono">effort</code> —
-        that&apos;s what the token gauge is for. Keys are never logged server-side.
+        that&apos;s what the token gauge is for. Credentials are never logged server-side.
       </footer>
     </main>
   );
