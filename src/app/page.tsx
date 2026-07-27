@@ -38,6 +38,24 @@ interface ReplayResult {
   model?: string | null;
 }
 
+interface SampleSide {
+  samples: Array<{ ok: boolean; httpStatus?: number; outputTokens?: number | null; thinkingTokens?: number | null; signatureCount?: number; error?: string }>;
+  outputTokens: number[];
+  thinkingTokens: number[];
+  medianOutput: number | null;
+  signedSamples: number;
+}
+
+interface SampleResult {
+  ok: boolean;
+  n: number;
+  trusted: SampleSide;
+  relay: SampleSide;
+  ratio: number | null;
+  verdict: "likely_watered" | "consistent" | "insufficient_data";
+  error?: string;
+}
+
 interface TrustedState {
   provider: Provider;
   baseUrl: string; // anthropic only
@@ -172,6 +190,9 @@ export default function Home() {
   const [proxyUrl, setProxyUrl] = useState("");
   const [replayResult, setReplayResult] = useState<ReplayResult | null>(null);
   const [replayLoading, setReplayLoading] = useState(false);
+  const [sampleN, setSampleN] = useState(5);
+  const [sampleResult, setSampleResult] = useState<SampleResult | null>(null);
+  const [sampleLoading, setSampleLoading] = useState(false);
   const [saveKeys, setSaveKeys] = useState(false);
 
   useEffect(() => {
@@ -298,6 +319,49 @@ export default function Home() {
       setReplayResult({ ok: false, verdict: "network_error", error: err instanceof Error ? err.message : String(err) });
     } finally {
       setReplayLoading(false);
+    }
+  }
+
+  async function runSample() {
+    setSampleLoading(true);
+    setSampleResult(null);
+    try {
+      const trustedCfg: Record<string, unknown> = { provider: trusted.provider };
+      if (trusted.provider === "anthropic") {
+        trustedCfg.baseUrl = trusted.baseUrl;
+        trustedCfg.apiKey = trusted.apiKey;
+      } else {
+        trustedCfg.region = trusted.region;
+        trustedCfg.bedrockApiKey = trusted.bedrockApiKey;
+      }
+      const res = await fetch("/api/sample", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          n: sampleN,
+          model,
+          prompt,
+          maxTokens: 8000,
+          effort,
+          proxyUrl,
+          trusted: trustedCfg,
+          relay: { provider: "anthropic", baseUrl: relay.baseUrl, apiKey: relay.apiKey },
+        }),
+      });
+      const json = (await res.json()) as SampleResult;
+      setSampleResult(json);
+    } catch (err) {
+      setSampleResult({
+        ok: false,
+        n: 0,
+        trusted: { samples: [], outputTokens: [], thinkingTokens: [], medianOutput: null, signedSamples: 0 },
+        relay: { samples: [], outputTokens: [], thinkingTokens: [], medianOutput: null, signedSamples: 0 },
+        ratio: null,
+        verdict: "insufficient_data",
+        error: err instanceof Error ? err.message : String(err),
+      } as SampleResult);
+    } finally {
+      setSampleLoading(false);
     }
   }
 
@@ -500,6 +564,26 @@ export default function Home() {
           />
           remember keys in this browser (localStorage)
         </label>
+        <span className="text-zinc-700">|</span>
+        <label className="flex items-center gap-2 text-sm text-zinc-400">
+          samples
+          <select
+            value={sampleN}
+            onChange={(e) => setSampleN(Number(e.target.value))}
+            className="rounded-lg border border-zinc-700 bg-zinc-950 px-2 py-1.5 text-sm text-zinc-100 outline-none focus:border-zinc-500"
+          >
+            {[3, 5, 7, 10].map((v) => (
+              <option key={v} value={v}>{v}</option>
+            ))}
+          </select>
+        </label>
+        <button
+          onClick={runSample}
+          disabled={!canRun || sampleLoading}
+          className="rounded-xl border border-zinc-600 px-4 py-2 text-sm font-medium text-zinc-200 transition hover:border-zinc-400 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {sampleLoading ? `Sampling ${sampleN}×…` : `∑ Run ${sampleN}-sample effort test`}
+        </button>
       </div>
 
       <section className="mb-8 grid gap-4 md:grid-cols-2">
@@ -546,9 +630,84 @@ export default function Home() {
         </section>
       )}
 
+      {/* N-sample effort test */}
+      {sampleResult && (
+        <section className="mb-8 rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
+          <h2 className="mb-3 font-semibold text-zinc-100">Effort test ({sampleResult.n} samples/side)</h2>
+          {sampleResult.error && !sampleResult.ok ? (
+            <pre className="text-xs text-red-400 whitespace-pre-wrap">{sampleResult.error}</pre>
+          ) : (
+            <>
+              <div className="grid gap-3 text-sm md:grid-cols-3">
+                <div className="rounded-xl bg-zinc-950 p-3">
+                  <div className="mb-1 text-zinc-500">median output tokens</div>
+                  <div className="font-mono text-zinc-100">
+                    {sampleResult.trusted.medianOutput ?? "—"} vs {sampleResult.relay.medianOutput ?? "—"}
+                  </div>
+                  <p className="mt-1 text-xs text-zinc-500">trusted vs relay</p>
+                </div>
+                <div className="rounded-xl bg-zinc-950 p-3">
+                  <div className="mb-1 text-zinc-500">relay / trusted ratio</div>
+                  {sampleResult.ratio != null ? (
+                    <Badge tone={sampleResult.ratio >= 0.7 ? "green" : "amber"}>
+                      ≈ {sampleResult.ratio.toFixed(2)}
+                    </Badge>
+                  ) : (
+                    <Badge tone="gray">n/a</Badge>
+                  )}
+                  <p className="mt-1 text-xs text-zinc-500">below ~0.7 suggests reduced thinking effort</p>
+                </div>
+                <div className="rounded-xl bg-zinc-950 p-3">
+                  <div className="mb-1 text-zinc-500">verdict</div>
+                  {sampleResult.verdict === "likely_watered" ? (
+                    <Badge tone="red">likely effort-watered</Badge>
+                  ) : sampleResult.verdict === "consistent" ? (
+                    <Badge tone="green">consistent</Badge>
+                  ) : (
+                    <Badge tone="gray">insufficient data</Badge>
+                  )}
+                  <p className="mt-1 text-xs text-zinc-500">
+                    relay signed samples: {sampleResult.relay.signedSamples}/{sampleResult.n}
+                  </p>
+                </div>
+              </div>
+              <details className="mt-3">
+                <summary className="cursor-pointer text-xs text-zinc-500 hover:text-zinc-300">
+                  per-sample output tokens
+                </summary>
+                <div className="mt-2 grid gap-2 text-xs md:grid-cols-2">
+                  <div className="rounded bg-zinc-950 p-2">
+                    <div className="mb-1 text-zinc-500">trusted</div>
+                    <div className="font-mono text-zinc-300">[{sampleResult.trusted.outputTokens.join(", ")}]</div>
+                    <div className="mt-1 text-zinc-500">thinking: [{sampleResult.trusted.thinkingTokens.join(", ")}]</div>
+                  </div>
+                  <div className="rounded bg-zinc-950 p-2">
+                    <div className="mb-1 text-zinc-500">relay</div>
+                    <div className="font-mono text-zinc-300">[{sampleResult.relay.outputTokens.join(", ")}]</div>
+                    <div className="mt-1 text-zinc-500">thinking: [{sampleResult.relay.thinkingTokens.join(", ")}]</div>
+                  </div>
+                </div>
+                {sampleResult.relay.samples.some((s) => !s.ok) && (
+                  <div className="mt-2 text-xs text-amber-400">
+                    Some relay samples failed:{" "}
+                    {sampleResult.relay.samples.filter((s) => !s.ok).map((s) => s.error).slice(0, 2).join(" | ")}
+                  </div>
+                )}
+              </details>
+              <p className="mt-3 text-xs text-zinc-500">
+                Output tokens include thinking + text, so this is a heuristic gauge of how much the
+                model actually &quot;thought + wrote&quot;, not a direct measure of the effort parameter.
+                A relay that consistently produces far less output on the same prompt at effort=max is
+                likely lowering the real effort. This does NOT prove a different model — see signature
+                replay for identity.
+              </p>
+            </>
+          )}
+        </section>
+      )}
+
       <section className="rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
-        <h2 className="mb-2 font-semibold text-zinc-100">Signature replay (the hard test)</h2>
-        <p className="mb-3 text-sm text-zinc-400">
+        <h2 className="mb-2 font-semibold text-zinc-100">Signature replay (the hard test)</h2><p className="mb-3 text-sm text-zinc-400">
           Takes the captured thinking block (from the relay if it produced one, else the baseline)
           and replays it <em>unchanged</em> to your <strong>trusted</strong> endpoint (
           {trusted.provider === "bedrock" ? "AWS Bedrock" : "official Anthropic API"}).
