@@ -169,6 +169,7 @@ export default function Home() {
   const [effort, setEffort] = useState<Effort>("max");
   const [prompt, setPrompt] = useState(DEFAULT_PROMPT);
   const [maxTokens, setMaxTokens] = useState(16000);
+  const [proxyUrl, setProxyUrl] = useState("");
   const [replayResult, setReplayResult] = useState<ReplayResult | null>(null);
   const [replayLoading, setReplayLoading] = useState(false);
   const [saveKeys, setSaveKeys] = useState(false);
@@ -177,7 +178,7 @@ export default function Home() {
     const saved = window.localStorage.getItem("crv-keys-v2");
     if (saved) {
       try {
-        const k = JSON.parse(saved) as Partial<TrustedState> & { relayKey?: string; relayUrl?: string };
+        const k = JSON.parse(saved) as Partial<TrustedState> & { relayKey?: string; relayUrl?: string; proxyUrl?: string };
         setTrusted((s) => ({
           ...s,
           provider: (k.provider as Provider) ?? s.provider,
@@ -187,6 +188,7 @@ export default function Home() {
           bedrockApiKey: k.bedrockApiKey ?? "",
         }));
         setRelay((s) => ({ ...s, apiKey: k.relayKey ?? "", baseUrl: k.relayUrl ?? "" }));
+        setProxyUrl(k.proxyUrl ?? "");
         setSaveKeys(true);
       } catch { /* ignore */ }
     }
@@ -214,6 +216,7 @@ export default function Home() {
         thinking: true,
         display: "summarized",
         effort,
+        proxyUrl,
       };
       if (which === "trusted") {
         body.provider = trusted.provider;
@@ -256,6 +259,7 @@ export default function Home() {
           bedrockApiKey: trusted.bedrockApiKey,
           relayKey: relay.apiKey,
           relayUrl: relay.baseUrl,
+          proxyUrl,
         }),
       );
     }
@@ -275,6 +279,7 @@ export default function Home() {
         provider: trusted.provider,
         model,
         thinkingBlocks: replaySource.thinkingBlocks,
+        proxyUrl,
       };
       if (trusted.provider === "anthropic") {
         body.apiKey = trusted.apiKey;
@@ -347,6 +352,21 @@ export default function Home() {
             onChange={(e) => setMaxTokens(Number(e.target.value))}
             className={inputCls}
           />
+        </label>
+        <label className="block text-sm md:col-span-3">
+          <span className="mb-1 block text-zinc-400">
+            HTTP proxy (optional) — server-side requests go through it, e.g. to reach a supported region
+          </span>
+          <input
+            value={proxyUrl}
+            onChange={(e) => setProxyUrl(e.target.value)}
+            placeholder="http://127.0.0.1:7890 or http://user:pass@host:port"
+            className={inputCls}
+          />
+          <p className="mt-1 text-xs text-zinc-500">
+            The verifier calls Bedrock / the relay from this local server, so the proxy must cover the
+            server&apos;s outbound traffic (not just your browser). Leave empty to connect directly.
+          </p>
         </label>
         <label className="block text-sm md:col-span-3">
           <span className="mb-1 block text-zinc-400">prompt (same for both sides)</span>

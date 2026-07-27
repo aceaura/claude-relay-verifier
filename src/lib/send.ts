@@ -1,3 +1,5 @@
+import { ProxyAgent, fetch as undiciFetch } from "undici";
+
 export type Provider = "anthropic" | "bedrock";
 
 export interface SendParams {
@@ -10,6 +12,8 @@ export interface SendParams {
   region?: string;
   /** Bedrock API key (long-term `bedrock-api-key-...` or 12h temporary). Sent as Bearer. */
   bedrockApiKey?: string;
+  /** Optional HTTP/HTTPS proxy, e.g. http://127.0.0.1:7890 — routes the request through it. */
+  proxyUrl?: string;
   /** request body (Messages API shape) */
   payload: Record<string, unknown>;
 }
@@ -58,10 +62,25 @@ function buildRequest(p: SendParams): { url: string; headers: Record<string, str
 export async function sendMessages(p: SendParams, timeoutMs = 240_000): Promise<SendResult> {
   const { url, headers } = buildRequest(p);
   const started = Date.now();
+  const body = JSON.stringify(p.payload);
+
+  if (p.proxyUrl && p.proxyUrl.trim()) {
+    const dispatcher = new ProxyAgent(p.proxyUrl.trim());
+    const res = await undiciFetch(url, {
+      method: "POST",
+      headers,
+      body,
+      dispatcher,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const text = await res.text();
+    return { httpStatus: res.status, text, latencyMs: Date.now() - started };
+  }
+
   const res = await fetch(url, {
     method: "POST",
     headers,
-    body: JSON.stringify(p.payload),
+    body,
     signal: AbortSignal.timeout(timeoutMs),
   });
   const text = await res.text();

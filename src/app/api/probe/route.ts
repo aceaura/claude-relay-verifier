@@ -10,6 +10,7 @@ interface ProbeRequestBody {
   apiKey?: string;
   region?: string;
   bedrockApiKey?: string;
+  proxyUrl?: string;
   model?: string;
   prompt?: string;
   maxTokens?: number;
@@ -54,6 +55,7 @@ export async function POST(req: NextRequest) {
       apiKey: body.apiKey,
       region: body.region,
       bedrockApiKey: body.bedrockApiKey,
+      proxyUrl: body.proxyUrl,
       payload,
     });
 

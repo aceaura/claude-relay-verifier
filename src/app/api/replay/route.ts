@@ -10,6 +10,7 @@ interface ReplayRequestBody {
   apiKey?: string; // anthropic official key
   region?: string; // bedrock
   bedrockApiKey?: string;
+  proxyUrl?: string;
   model?: string;
   thinkingBlocks: Array<Record<string, unknown>>;
 }
@@ -59,6 +60,7 @@ export async function POST(req: NextRequest) {
         apiKey: body.apiKey,
         region: body.region,
         bedrockApiKey: body.bedrockApiKey,
+        proxyUrl: body.proxyUrl,
         payload: {
           model,
           max_tokens: 1024,
