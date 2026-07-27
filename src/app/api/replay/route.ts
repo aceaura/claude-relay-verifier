@@ -9,9 +9,7 @@ interface ReplayRequestBody {
   provider?: Provider;
   apiKey?: string; // anthropic official key
   region?: string; // bedrock
-  accessKeyId?: string;
-  secretAccessKey?: string;
-  sessionToken?: string;
+  bedrockApiKey?: string;
   model?: string;
   thinkingBlocks: Array<Record<string, unknown>>;
 }
@@ -60,9 +58,7 @@ export async function POST(req: NextRequest) {
         baseUrl: provider === "anthropic" ? "https://api.anthropic.com" : undefined,
         apiKey: body.apiKey,
         region: body.region,
-        accessKeyId: body.accessKeyId,
-        secretAccessKey: body.secretAccessKey,
-        sessionToken: body.sessionToken,
+        bedrockApiKey: body.bedrockApiKey,
         payload: {
           model,
           max_tokens: 1024,

@@ -43,9 +43,7 @@ interface TrustedState {
   baseUrl: string; // anthropic only
   apiKey: string; // anthropic only
   region: string; // bedrock
-  accessKeyId: string;
-  secretAccessKey: string;
-  sessionToken: string;
+  bedrockApiKey: string; // bedrock
   result: ProbeResult | null;
   loading: boolean;
 }
@@ -157,9 +155,7 @@ export default function Home() {
     baseUrl: "https://api.anthropic.com",
     apiKey: "",
     region: "us-east-1",
-    accessKeyId: "",
-    secretAccessKey: "",
-    sessionToken: "",
+    bedrockApiKey: "",
     result: null,
     loading: false,
   });
@@ -188,9 +184,7 @@ export default function Home() {
           apiKey: k.apiKey ?? "",
           baseUrl: k.baseUrl ?? s.baseUrl,
           region: k.region ?? s.region,
-          accessKeyId: k.accessKeyId ?? "",
-          secretAccessKey: k.secretAccessKey ?? "",
-          sessionToken: k.sessionToken ?? "",
+          bedrockApiKey: k.bedrockApiKey ?? "",
         }));
         setRelay((s) => ({ ...s, apiKey: k.relayKey ?? "", baseUrl: k.relayUrl ?? "" }));
         setSaveKeys(true);
@@ -201,7 +195,7 @@ export default function Home() {
   const trustedReady =
     trusted.provider === "anthropic"
       ? !!trusted.apiKey
-      : !!(trusted.region && trusted.accessKeyId && trusted.secretAccessKey);
+      : !!(trusted.region && trusted.bedrockApiKey);
 
   async function runProbe(which: "trusted" | "relay") {
     const setT = which === "trusted" ? setTrusted : null;
@@ -228,9 +222,7 @@ export default function Home() {
           body.apiKey = trusted.apiKey;
         } else {
           body.region = trusted.region;
-          body.accessKeyId = trusted.accessKeyId;
-          body.secretAccessKey = trusted.secretAccessKey;
-          body.sessionToken = trusted.sessionToken;
+          body.bedrockApiKey = trusted.bedrockApiKey;
         }
       } else {
         body.provider = "anthropic";
@@ -261,9 +253,7 @@ export default function Home() {
           apiKey: trusted.apiKey,
           baseUrl: trusted.baseUrl,
           region: trusted.region,
-          accessKeyId: trusted.accessKeyId,
-          secretAccessKey: trusted.secretAccessKey,
-          sessionToken: trusted.sessionToken,
+          bedrockApiKey: trusted.bedrockApiKey,
           relayKey: relay.apiKey,
           relayUrl: relay.baseUrl,
         }),
@@ -290,9 +280,7 @@ export default function Home() {
         body.apiKey = trusted.apiKey;
       } else {
         body.region = trusted.region;
-        body.accessKeyId = trusted.accessKeyId;
-        body.secretAccessKey = trusted.secretAccessKey;
-        body.sessionToken = trusted.sessionToken;
+        body.bedrockApiKey = trusted.bedrockApiKey;
       }
       const res = await fetch("/api/replay", {
         method: "POST",
@@ -426,33 +414,20 @@ export default function Home() {
                   className={inputCls}
                 />
               </label>
-              <label className="mb-3 block text-sm">
-                <span className="mb-1 block text-zinc-400">AWS access key ID</span>
-                <input
-                  value={trusted.accessKeyId}
-                  onChange={(e) => setTrusted((s) => ({ ...s, accessKeyId: e.target.value }))}
-                  placeholder="AKIA..."
-                  className={inputCls}
-                />
-              </label>
-              <label className="mb-3 block text-sm">
-                <span className="mb-1 block text-zinc-400">AWS secret access key</span>
-                <input
-                  type="password"
-                  value={trusted.secretAccessKey}
-                  onChange={(e) => setTrusted((s) => ({ ...s, secretAccessKey: e.target.value }))}
-                  className={inputCls}
-                />
-              </label>
               <label className="block text-sm">
-                <span className="mb-1 block text-zinc-400">session token (optional)</span>
+                <span className="mb-1 block text-zinc-400">Bedrock API key</span>
                 <input
                   type="password"
-                  value={trusted.sessionToken}
-                  onChange={(e) => setTrusted((s) => ({ ...s, sessionToken: e.target.value }))}
+                  value={trusted.bedrockApiKey}
+                  onChange={(e) => setTrusted((s) => ({ ...s, bedrockApiKey: e.target.value }))}
+                  placeholder="bedrock-api-key-..."
                   className={inputCls}
                 />
               </label>
+              <p className="mt-3 text-xs text-zinc-500">
+                Uses the Bedrock API key (long-term or 12-hour temporary) via{" "}
+                <code className="font-mono">Authorization: Bearer</code> — no SigV4 needed.
+              </p>
             </>
           )}
         </div>

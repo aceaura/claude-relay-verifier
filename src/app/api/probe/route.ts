@@ -9,9 +9,7 @@ interface ProbeRequestBody {
   baseUrl?: string;
   apiKey?: string;
   region?: string;
-  accessKeyId?: string;
-  secretAccessKey?: string;
-  sessionToken?: string;
+  bedrockApiKey?: string;
   model?: string;
   prompt?: string;
   maxTokens?: number;
@@ -55,9 +53,7 @@ export async function POST(req: NextRequest) {
       baseUrl: body.baseUrl,
       apiKey: body.apiKey,
       region: body.region,
-      accessKeyId: body.accessKeyId,
-      secretAccessKey: body.secretAccessKey,
-      sessionToken: body.sessionToken,
+      bedrockApiKey: body.bedrockApiKey,
       payload,
     });
 

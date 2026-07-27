@@ -1,7 +1,3 @@
-import { SignatureV4 } from "@aws-sdk/signature-v4";
-import { Sha256 } from "@aws-crypto/sha256-js";
-import { HttpRequest } from "@smithy/protocol-http";
-
 export type Provider = "anthropic" | "bedrock";
 
 export interface SendParams {
@@ -12,9 +8,8 @@ export interface SendParams {
   apiKey?: string;
   /** bedrock */
   region?: string;
-  accessKeyId?: string;
-  secretAccessKey?: string;
-  sessionToken?: string;
+  /** Bedrock API key (long-term `bedrock-api-key-...` or 12h temporary). Sent as Bearer. */
+  bedrockApiKey?: string;
   /** request body (Messages API shape) */
   payload: Record<string, unknown>;
 }
@@ -31,47 +26,19 @@ function normalizeBase(raw: string): string {
   return u;
 }
 
-function bedrockHost(region: string): string {
-  return `bedrock-mantle.${region}.api.aws`;
-}
-
-/** Build the target URL + headers for the given provider. */
-async function buildRequest(p: SendParams): Promise<{ url: string; headers: Record<string, string> }> {
-  const body = JSON.stringify(p.payload);
-
+function buildRequest(p: SendParams): { url: string; headers: Record<string, string> } {
   if (p.provider === "bedrock") {
     const region = (p.region ?? "").trim();
     if (!region) throw new Error("Bedrock provider requires a region (e.g. us-east-1)");
-    if (!p.accessKeyId || !p.secretAccessKey) {
-      throw new Error("Bedrock provider requires accessKeyId and secretAccessKey");
-    }
-    const host = bedrockHost(region);
-    const url = `https://${host}/anthropic/v1/messages`;
-
-    const signer = new SignatureV4({
-      service: "bedrock-mantle",
-      region,
-      credentials: {
-        accessKeyId: p.accessKeyId,
-        secretAccessKey: p.secretAccessKey,
-        ...(p.sessionToken ? { sessionToken: p.sessionToken } : {}),
-      },
-      sha256: Sha256,
-    });
-
-    const req = new HttpRequest({
-      method: "POST",
-      protocol: "https:",
-      hostname: host,
-      path: "/anthropic/v1/messages",
+    if (!p.bedrockApiKey) throw new Error("Bedrock provider requires a Bedrock API key");
+    const url = `https://bedrock-mantle.${region}.api.aws/anthropic/v1/messages`;
+    return {
+      url,
       headers: {
         "content-type": "application/json",
-        host,
+        authorization: `Bearer ${p.bedrockApiKey}`,
       },
-      body,
-    });
-    const signed = await signer.sign(req);
-    return { url, headers: signed.headers as Record<string, string> };
+    };
   }
 
   // anthropic / relay
@@ -89,7 +56,7 @@ async function buildRequest(p: SendParams): Promise<{ url: string; headers: Reco
 }
 
 export async function sendMessages(p: SendParams, timeoutMs = 240_000): Promise<SendResult> {
-  const { url, headers } = await buildRequest(p);
+  const { url, headers } = buildRequest(p);
   const started = Date.now();
   const res = await fetch(url, {
     method: "POST",
