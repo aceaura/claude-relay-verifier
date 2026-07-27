@@ -30,6 +30,13 @@ function normalizeBase(raw: string): string {
   return u;
 }
 
+/** Bedrock model IDs need the `anthropic.` prefix (no version suffix). */
+function toBedrockModel(model: string): string {
+  const m = model.trim();
+  if (m.startsWith("anthropic.") || m.includes(".anthropic.") || m.startsWith("arn:")) return m;
+  return `anthropic.${m}`;
+}
+
 function buildRequest(p: SendParams): { url: string; headers: Record<string, string> } {
   if (p.provider === "bedrock") {
     const region = (p.region ?? "").trim();
@@ -60,9 +67,16 @@ function buildRequest(p: SendParams): { url: string; headers: Record<string, str
 }
 
 export async function sendMessages(p: SendParams, timeoutMs = 240_000): Promise<SendResult> {
+  // Bedrock: normalize model id to `anthropic.<id>` and require anthropic_version in body.
+  const payload: Record<string, unknown> = { ...p.payload };
+  if (p.provider === "bedrock") {
+    if (typeof payload.model === "string") payload.model = toBedrockModel(payload.model);
+    if (!("anthropic_version" in payload)) payload.anthropic_version = "bedrock-2023-05-31";
+  }
+
   const { url, headers } = buildRequest(p);
   const started = Date.now();
-  const body = JSON.stringify(p.payload);
+  const body = JSON.stringify(payload);
 
   if (p.proxyUrl && p.proxyUrl.trim()) {
     const dispatcher = new ProxyAgent(p.proxyUrl.trim());
